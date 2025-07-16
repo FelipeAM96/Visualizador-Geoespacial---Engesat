@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visualizador Geoespacial</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f4f8; /* Light blue-gray background */
+        }
+        #map {
+            height: calc(100vh - 120px); /* Adjust height dynamically */
+            width: 100%;
+            border-radius: 0.75rem; /* rounded-xl */
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); /* shadow-lg */
+        }
+        .file-input-label {
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .file-input-label:hover {
+            background-color: #4a90e2; /* Darker blue on hover */
+        }
+        /* Custom styles for Leaflet controls */
+        .leaflet-control-container .leaflet-top.leaflet-left {
+            top: 20px;
+            left: 20px;
+        }
+        .leaflet-control-container .leaflet-bottom.leaflet-right {
+            bottom: 20px;
+            right: 20px;
+        }
+    </style>
+</head>
+<body class="flex flex-col min-h-screen text-gray-800">
+    <header class="bg-gradient-to-r from-blue-600 to-indigo-700 text-white p-4 shadow-md">
+        <div class="container mx-auto flex justify-between items-center">
+            <h1 class="text-3xl font-bold">Visualizador Geoespacial</h1>
+            <nav>
+                <a href="#" class="text-white hover:text-blue-200 mx-2">Início</a>
+                <a href="#" class="text-white hover:text-blue-200 mx-2">Sobre</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="flex-grow container mx-auto p-6">
+        <div class="bg-white rounded-xl shadow-lg p-6 mb-6">
+            <h2 class="text-2xl font-semibold mb-4 text-gray-700">Carregar Arquivos Geoespaciais</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <!-- KML Input -->
+                <div class="flex flex-col items-center">
+                    <label for="kmlFile" class="file-input-label bg-blue-500 text-white py-3 px-6 rounded-lg shadow-md hover:shadow-lg transition duration-300 ease-in-out text-lg font-medium w-full text-center">
+                        Carregar KML (.kml)
+                    </label>
+                    <input type="file" id="kmlFile" accept=".kml" class="hidden mt-2" onchange="handleFileLoad(event, 'kml')">
+                    <span id="kmlFileName" class="mt-2 text-sm text-gray-600">Nenhum arquivo KML selecionado</span>
+                </div>
+
+                <!-- KMZ Input -->
+                <div class="flex flex-col items-center">
+                    <label for="kmzFile" class="file-input-label bg-purple-500 text-white py-3 px-6 rounded-lg shadow-md hover:shadow-lg transition duration-300 ease-in-out text-lg font-medium w-full text-center">
+                        Carregar KMZ (.kmz)
+                    </label>
+                    <input type="file" id="kmzFile" accept=".kmz" class="hidden mt-2" onchange="handleFileLoad(event, 'kmz')">
+                    <span id="kmzFileName" class="mt-2 text-sm text-gray-600">Nenhum arquivo KMZ selecionado</span>
+                </div>
+
+                <!-- Placeholder for SHP -->
+                <div class="flex flex-col items-center">
+                    <div class="bg-gray-300 text-gray-700 py-3 px-6 rounded-lg shadow-md text-lg font-medium w-full text-center opacity-70 cursor-not-allowed">
+                        Shapefile (.shp) - Em Breve
+                    </div>
+                    <span class="mt-2 text-sm text-gray-500">Requer múltiplos arquivos (.shp, .dbf, etc.) e processamento mais complexo.</span>
+                </div>
+            </div>
+            <div id="messageBox" class="mt-4 p-3 bg-yellow-100 border border-yellow-400 text-yellow-700 rounded-md hidden" role="alert">
+                <!-- Messages will be displayed here -->
+            </div>
+        </div>
+
+        <div id="map" class="z-0"></div>
+    </main>
+
+    <footer class="bg-gray-800 text-white p-4 text-center mt-6">
+        <div class="container mx-auto">
+            <p>&copy; 2024 Visualizador Geoespacial. Todos os direitos reservados.</p>
+        </div>
+    </footer>
+
+    <!-- Leaflet JS - MUST BE LOADED FIRST -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Leaflet KML Plugin -->
+    <script src="https://unpkg.com/leaflet-kml@1.0.0/L.KML.js"></script>
+    <!-- JSZip for KMZ handling -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js"></script>
+
+    <script>
+        let map;
+        let kmlLayer = null;
+        let kmzImageLayers = []; // To store Leaflet image layers from KMZ
+        let messageBox;
+
+        // Initialize the map on window load
+        window.onload = function() {
+            messageBox = document.getElementById('messageBox');
+            map = L.map('map').setView([-15.7801, -47.9292], 5); // Centered roughly on Brazil
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }).addTo(map);
+
+            // Add a simple scale control
+            L.control.scale().addTo(map);
+        };
+
+        /**
+         * Displays a message in the message box.
+         * @param {string} message - The message to display.
+         * @param {string} type - The type of message (e.g., 'success', 'error', 'warning').
+         */
+        function showMessage(message, type = 'info') {
+            messageBox.textContent = message;
+            messageBox.className = `mt-4 p-3 rounded-md block`;
+            if (type === 'error') {
+                messageBox.classList.add('bg-red-100', 'border-red-400', 'text-red-700');
+            } else if (type === 'success') {
+                messageBox.classList.add('bg-green-100', 'border-green-400', 'text-green-700');
+            } else { // info or warning
+                messageBox.classList.add('bg-yellow-100', 'border-yellow-400', 'text-yellow-700');
+            }
+            messageBox.classList.remove('hidden');
+        }
+
+        /**
+         * Hides the message box.
+         */
+        function hideMessage() {
+            messageBox.classList.add('hidden');
+        }
+
+        /**
+         * Clears all existing layers from the map.
+         */
+        function clearLayers() {
+            if (kmlLayer) {
+                map.removeLayer(kmlLayer);
+                kmlLayer = null;
+            }
+            if (kmzImageLayers.length > 0) {
+                kmzImageLayers.forEach(layer => map.removeLayer(layer));
+                kmzImageLayers = [];
+            }
+        }
+
+        /**
+         * Handles the file input change event.
+         * @param {Event} event - The file input change event.
+         * @param {string} type - The type of file ('kml' or 'kmz').
+         */
+        function handleFileLoad(event, type) {
+            const file = event.target.files[0];
+            if (!file) {
+                showMessage(`Nenhum arquivo ${type.toUpperCase()} selecionado.`, 'warning');
+                return;
+            }
+
+            hideMessage(); // Clear previous messages
+            clearLayers(); // Clear existing layers before loading new ones
+
+            const fileNameSpan = document.getElementById(`${type}FileName`);
+            if (fileNameSpan) { // Check if element exists for the specific type
+                fileNameSpan.textContent = `Arquivo: ${file.name}`;
+            }
+
+            const reader = new FileReader();
+
+            reader.onload = async function(e) {
+                try {
+                    if (type === 'kml') {
+                        loadKML(e.target.result);
+                    } else if (type === 'kmz') {
+                        await loadKMZ(file); // Pass the file object for KMZ
+                    }
+                    showMessage(`Arquivo ${file.name} carregado com sucesso!`, 'success');
+                } catch (error) {
+                    console.error(`Erro ao carregar o arquivo ${type}:`, error);
+                    showMessage(`Erro ao carregar o arquivo ${file.name}: ${error.message}`, 'error');
+                }
+            };
+
+            reader.onerror = function() {
+                showMessage(`Erro ao ler o arquivo ${file.name}.`, 'error');
+            };
+
+            // KMZ needs to be read as ArrayBuffer for JSZip
+            if (type === 'kmz') {
+                reader.readAsArrayBuffer(file);
+            } else { // KML is read as text
+                reader.readAsText(file);
+            }
+        }
+
+        /**
+         * Loads and displays a KML file on the map.
+         * @param {string} kmlString - The KML file content as a string.
+         */
+        function loadKML(kmlString) {
+            const parser = new DOMParser();
+            const kml = parser.parseFromString(kmlString, 'text/xml');
+            kmlLayer = new L.KML(kml);
+            map.addLayer(kmlLayer);
+            if (kmlLayer.getBounds) {
+                const bounds = kmlLayer.getBounds();
+                if (bounds && bounds.isValid()) {
+                    map.fitBounds(bounds);
+                } else {
+                    showMessage("KML carregado, mas os limites não são válidos. Pode não conter geometrias ou estar malformado.", "warning");
+                }
+            }
+        }
+
+        /**
+         * Loads and displays a KMZ file on the map, extracting KML and image overlays.
+         * @param {File} file - The KMZ file object.
+         */
+        async function loadKMZ(file) {
+            showMessage(`Carregando KMZ: ${file.name}...`, 'info');
+            console.log("Attempting to load KMZ with file:", file);
+
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                const zip = await JSZip.loadAsync(arrayBuffer);
+
+                let kmlContent = null;
+                const imageMap = {}; // Stores image paths to Data URLs
+
+                // Iterate through zip entries to find KML and images
+                for (const filename in zip.files) {
+                    const zipEntry = zip.files[filename];
+                    if (!zipEntry.dir) { // Only process files, not directories
+                        const lowerFilename = filename.toLowerCase();
+                        if (lowerFilename.endsWith('.kml')) {
+                            // Prioritize 'doc.kml' as it's often the main KML file in a KMZ
+                            if (lowerFilename.includes('doc.kml') || kmlContent === null) {
+                                kmlContent = await zipEntry.async('text');
+                                console.log(`Found KML file inside KMZ: ${filename}`);
+                            }
+                        } else if (lowerFilename.endsWith('.png') || lowerFilename.endsWith('.jpg') || lowerFilename.endsWith('.jpeg') || lowerFilename.endsWith('.gif')) {
+                            // Read image as base64 and store it
+                            const base64 = await zipEntry.async('base64');
+                            imageMap[filename] = `data:${mimeType(lowerFilename)};base64,${base64}`;
+                            console.log(`Found image file inside KMZ: ${filename}`);
+                        }
+                    }
+                }
+
+                if (!kmlContent) {
+                    throw new Error("Nenhum arquivo KML principal encontrado dentro do KMZ.");
+                }
+
+                const parser = new DOMParser();
+                const kmlDoc = parser.parseFromString(kmlContent, 'text/xml');
+
+                // Process KML features (points, lines, polygons) using L.KML
+                // This will add all KML features except GroundOverlays (which we handle separately for embedded images)
+                kmlLayer = new L.KML(kmlDoc);
+                map.addLayer(kmlLayer);
+
+                // Process GroundOverlays (images)
+                const groundOverlays = kmlDoc.querySelectorAll('GroundOverlay');
+                let hasImageOverlay = false;
+                let combinedBounds = null;
+
+                groundOverlays.forEach(overlay => {
+                    const iconHref = overlay.querySelector('Icon href')?.textContent;
+                    const north = parseFloat(overlay.querySelector('LatLonBox north')?.textContent);
+                    const south = parseFloat(overlay.querySelector('LatLonBox south')?.textContent);
+                    const east = parseFloat(overlay.querySelector('LatLonBox east')?.textContent);
+                    const west = parseFloat(overlay.querySelector('LatLonBox west')?.textContent);
+
+                    if (iconHref && !isNaN(north) && !isNaN(south) && !isNaN(east) && !isNaN(west)) {
+                        // Normalize iconHref to match keys in imageMap (which are full paths from zip)
+                        const normalizedIconHref = iconHref.replace(/\\/g, '/'); // Replace backslashes with forward slashes
+
+                        const imageUrl = imageMap[normalizedIconHref]; // Get the data URL from our map
+                        if (imageUrl) {
+                            hasImageOverlay = true;
+                            const bounds = [[south, west], [north, east]];
+                            const imageOverlay = L.imageOverlay(imageUrl, bounds).addTo(map);
+                            kmzImageLayers.push(imageOverlay); // Store for easy removal later
+
+                            // Extend combined bounds to include this image overlay
+                            if (combinedBounds === null) {
+                                combinedBounds = L.latLngBounds(bounds);
+                            } else {
+                                combinedBounds.extend(bounds);
+                            }
+                            console.log(`Added KMZ image overlay for ${iconHref} with bounds:`, bounds);
+                        } else {
+                            console.warn(`Image for GroundOverlay not found in KMZ's imageMap: ${iconHref}`);
+                        }
+                    }
+                });
+
+                // Fit map bounds to all KML features and image overlays
+                let finalBounds = null;
+                if (kmlLayer.getBounds && kmlLayer.getBounds().isValid()) {
+                    finalBounds = kmlLayer.getBounds();
+                }
+                if (combinedBounds && combinedBounds.isValid()) {
+                    if (finalBounds) {
+                        finalBounds.extend(combinedBounds);
+                    } else {
+                        finalBounds = combinedBounds;
+                    }
+                }
+
+                if (finalBounds && finalBounds.isValid()) {
+                    map.fitBounds(finalBounds);
+                    showMessage(`Arquivo KMZ carregado com sucesso!`, 'success');
+                } else if (hasImageOverlay) {
+                    showMessage("KMZ carregado, mas não foi possível definir os limites do mapa com precisão para as imagens. Verifique a consola para GroundOverlays.", "warning");
+                } else {
+                    showMessage("KMZ carregado, mas não contém geometrias ou imagens válidas para focar o mapa.", "warning");
+                }
+
+            } catch (error) {
+                console.error("Erro ao carregar KMZ:", error);
+                showMessage(`Erro ao carregar KMZ: ${error.message}. Verifique se o arquivo está correto e contém KML válido e imagens.`, 'error');
+            }
+        }
+
+        // Helper to determine MIME type for data URL based on file extension
+        function mimeType(filename) {
+            if (filename.endsWith('.png')) return 'image/png';
+            if (filename.endsWith('.jpg') || filename.endsWith('.jpeg')) return 'image/jpeg';
+            if (filename.endsWith('.gif')) return 'image/gif';
+            return 'application/octet-stream'; // Default for unknown types
+        }
+
+        // Handle window resize to adjust map height
+        window.addEventListener('resize', () => {
+            map.invalidateSize();
+        });
+    </script>
+</body>
+</html>
